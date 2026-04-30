@@ -1,0 +1,150 @@
+name: Scrape Transfermarkt (football-dashboard 30 leagues)
+
+# Hebdomadaire (samedi 02:00 UTC) + déclenchable manuellement via UI Actions
+on:
+  workflow_dispatch:
+    inputs:
+      seasons:
+        description: "Saisons à scraper (ex: 2025 ou 2024,2025)"
+        required: false
+        default: "2025"
+      competitions:
+        description: "Codes ligue (vide = 30 ligues du dashboard par défaut)"
+        required: false
+        default: ""
+  schedule:
+    - cron: "0 2 * * 6"  # Samedi 02:00 UTC
+
+# Empêche 2 runs simultanés de se chevaucher
+concurrency:
+  group: scrape-${{ github.workflow }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write  # nécessaire pour commit + push
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350  # 5h50, sous le plafond 6h des runners free
+    env:
+      DEFAULT_COMPETITIONS: "CL,EL,UCOL,GB1,ES1,IT1,L1,FR1,NL1,PO1,BE1,TR1,GB2,SC1,ES2,SE1,PL1,GR1,C1,MLS1,MEX1,BRA1,BRA2,CLI,CS,SA1,JAP1,RSK1,SFA1,CCL"
+      DEFAULT_SEASONS: "2025"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Setup Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install just (task runner)
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y just
+
+      - name: Install poetry
+        run: |
+          pipx install poetry==1.8.3
+          poetry --version
+
+      - name: Cache poetry dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pypoetry
+          key: poetry-${{ runner.os }}-${{ hashFiles('**/poetry.lock') }}
+          restore-keys: poetry-${{ runner.os }}-
+
+      - name: Install Python dependencies
+        run: |
+          poetry config virtualenvs.in-project true
+          poetry install --no-interaction --no-ansi
+          poetry run python -c "import tfmkt; print('tfmkt OK from MaloElPipo fork')"
+
+      - name: Compute parameters
+        id: params
+        run: |
+          SEASONS="${{ inputs.seasons || env.DEFAULT_SEASONS }}"
+          COMPS="${{ inputs.competitions || env.DEFAULT_COMPETITIONS }}"
+          echo "seasons=$SEASONS" >> $GITHUB_OUTPUT
+          echo "competitions=$COMPS" >> $GITHUB_OUTPUT
+          echo ""
+          echo "=== Run config ==="
+          echo "Saisons    : $SEASONS"
+          echo "Compétitions: $COMPS"
+
+      - name: Re-crawl competitions seed
+        run: |
+          poetry run just acquire_local --asset competitions --seasons ${{ steps.params.outputs.seasons }} || true
+          echo "competitions.json après re-crawl : $(wc -l < data/competitions.json) lignes"
+
+      - name: Re-apply manual extras (tier-2 + continental cups)
+        run: |
+          if [ -f data/competitions_extras.json ]; then
+            cat data/competitions_extras.json >> data/competitions.json
+            echo "competitions.json après extras : $(wc -l < data/competitions.json) lignes"
+          fi
+
+      - name: Scrape each competition (best effort)
+        run: |
+          mkdir -p logs
+          OK_LIST=""
+          FAIL_LIST=""
+          for COMP in $(echo "${{ steps.params.outputs.competitions }}" | tr ',' ' '); do
+            echo ""
+            echo "=== [$COMP] Scraping ==="
+            START=$(date +%s)
+            if poetry run just acquire_local \
+                --asset all \
+                --seasons ${{ steps.params.outputs.seasons }} \
+                --competitions $COMP 2>&1 | tee "logs/$COMP.log"; then
+              END=$(date +%s)
+              echo "[$COMP] OK en $((END - START))s"
+              OK_LIST="$OK_LIST $COMP"
+            else
+              echo "[$COMP] ÉCHEC, on continue avec le suivant"
+              FAIL_LIST="$FAIL_LIST $COMP"
+            fi
+          done
+          echo ""
+          echo "=== BILAN ==="
+          echo "OK  :$OK_LIST"
+          echo "FAIL:$FAIL_LIST"
+
+      - name: Prepare CSV datasets
+        run: |
+          poetry run just prepare_local || echo "prepare_local FAIL (continuons sans)"
+
+      - name: Show output stats
+        run: |
+          echo "=== Raw JSON Lines ==="
+          ls -la data/raw/transfermarkt-scraper/${{ steps.params.outputs.seasons }}/ 2>/dev/null || echo "Pas de dossier raw"
+          echo ""
+          echo "=== CSV finaux ==="
+          find data/prep -name "*.csv" -exec wc -l {} \; 2>/dev/null | head -20
+
+      - name: Commit and push results
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A data/
+          if git diff --cached --quiet; then
+            echo "Aucun changement à commiter"
+          else
+            git commit -m "data: scrape ${{ steps.params.outputs.seasons }} run #${{ github.run_number }}" \
+                       -m "Triggered by: ${{ github.event_name }}" \
+                       -m "Compétitions : ${{ steps.params.outputs.competitions }}"
+            git push
+          fi
+
+      - name: Upload logs as artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: scrape-logs-run-${{ github.run_number }}
+          path: logs/
+          retention-days: 30
