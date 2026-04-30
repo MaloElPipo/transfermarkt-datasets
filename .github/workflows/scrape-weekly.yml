@@ -94,18 +94,10 @@ jobs:
       - name: Re-apply manual extras (tier-2 + continental cups)
         shell: bash
         run: |
+          set +e
           if [ -f data/competitions_extras.json ] && [ -f data/competitions.json ]; then
-            # Dédup : ne ré-append que les codes pas encore présents
-            ADDED=0
-            while IFS= read -r line; do
-              [ -z "$line" ] && continue
-              CODE=$(echo "$line" | grep -oE '"competition_code"[[:space:]]*:[[:space:]]*"[^"]*"' | cut -d'"' -f4)
-              if [ -n "$CODE" ] && ! grep -q "\"competition_code\":[[:space:]]*\"$CODE\"" data/competitions.json; then
-                echo "$line" >> data/competitions.json
-                ADDED=$((ADDED + 1))
-              fi
-            done < data/competitions_extras.json
-            echo "Extras ajoutés : $ADDED ligne(s). Total competitions.json : $(wc -l < data/competitions.json) lignes"
+            cat data/competitions_extras.json >> data/competitions.json
+            echo "Extras réappliqués. Total competitions.json : $(wc -l < data/competitions.json) lignes"
           else
             echo "Skip : extras ou competitions.json absent"
           fi
