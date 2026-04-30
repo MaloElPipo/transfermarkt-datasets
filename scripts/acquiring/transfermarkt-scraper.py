@@ -266,9 +266,17 @@ def merge_output(existing_file, new_file, asset_name):
       replace = f" REPLACE ({', '.join(casts)})" if casts else ""
       return f"SELECT *{replace} FROM read_json_auto('{filepath}', sample_size=-1, union_by_name=true)"
 
-    existing_has_data = existing_file.exists() and conn.sql(
-      f"SELECT count(*) FROM read_json_auto('{str(existing_file)}', sample_size=1)"
-    ).fetchone()[0] > 0
+    # Defensive: a previous failed run may have left an empty/corrupt output_file
+    # behind. read_json_auto() raises on empty input. Fall back to write-from-scratch.
+    existing_has_data = False
+    if existing_file.exists() and existing_file.stat().st_size > 2:
+      try:
+        existing_has_data = conn.sql(
+          f"SELECT count(*) FROM read_json_auto('{str(existing_file)}', sample_size=1)"
+        ).fetchone()[0] > 0
+      except duckdb.Error as e:
+        logging.warning("existing %s file is unreadable, treating as empty: %s", asset_name, e)
+        existing_has_data = False
 
     if existing_has_data:
       merge_query = f"""
