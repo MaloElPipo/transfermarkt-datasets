@@ -78,19 +78,41 @@ jobs:
           echo "Compétitions: $COMPS"
 
       - name: Re-crawl competitions seed
+        shell: bash
         run: |
-          poetry run just acquire_local --asset competitions --seasons ${{ steps.params.outputs.seasons }} || true
-          echo "competitions.json après re-crawl : $(wc -l < data/competitions.json) lignes"
+          set +e  # ne pas faire planter le job si le crawl échoue
+          poetry run just acquire_local --asset competitions --seasons ${{ steps.params.outputs.seasons }}
+          set -e
+          if [ -f data/competitions.json ]; then
+            echo "competitions.json après re-crawl : $(wc -l < data/competitions.json) lignes"
+          else
+            echo "ATTENTION : data/competitions.json introuvable après re-crawl"
+          fi
 
       - name: Re-apply manual extras (tier-2 + continental cups)
+        shell: bash
         run: |
-          if [ -f data/competitions_extras.json ]; then
-            cat data/competitions_extras.json >> data/competitions.json
-            echo "competitions.json après extras : $(wc -l < data/competitions.json) lignes"
+          if [ -f data/competitions_extras.json ] && [ -f data/competitions.json ]; then
+            # Dédup : ne ré-append que les codes pas encore présents
+            ADDED=0
+            while IFS= read -r line; do
+              [ -z "$line" ] && continue
+              CODE=$(echo "$line" | grep -oE '"competition_code"[[:space:]]*:[[:space:]]*"[^"]*"' | cut -d'"' -f4)
+              if [ -n "$CODE" ] && ! grep -q "\"competition_code\":[[:space:]]*\"$CODE\"" data/competitions.json; then
+                echo "$line" >> data/competitions.json
+                ADDED=$((ADDED + 1))
+              fi
+            done < data/competitions_extras.json
+            echo "Extras ajoutés : $ADDED ligne(s). Total competitions.json : $(wc -l < data/competitions.json) lignes"
+          else
+            echo "Skip : extras ou competitions.json absent"
           fi
 
       - name: Scrape each competition (best effort)
+        shell: bash
         run: |
+          set +e  # on gère les erreurs nous-mêmes pour rester en best-effort
+          set -o pipefail  # nécessaire pour que 'cmd | tee' propage l'échec de cmd
           mkdir -p logs
           OK_LIST=""
           FAIL_LIST=""
@@ -98,15 +120,17 @@ jobs:
             echo ""
             echo "=== [$COMP] Scraping ==="
             START=$(date +%s)
-            if poetry run just acquire_local \
+            poetry run just acquire_local \
                 --asset all \
                 --seasons ${{ steps.params.outputs.seasons }} \
-                --competitions $COMP 2>&1 | tee "logs/$COMP.log"; then
-              END=$(date +%s)
+                --competitions $COMP 2>&1 | tee "logs/$COMP.log"
+            RC=${PIPESTATUS[0]}
+            END=$(date +%s)
+            if [ "$RC" -eq 0 ]; then
               echo "[$COMP] OK en $((END - START))s"
               OK_LIST="$OK_LIST $COMP"
             else
-              echo "[$COMP] ÉCHEC, on continue avec le suivant"
+              echo "[$COMP] ÉCHEC (exit=$RC) en $((END - START))s, on continue"
               FAIL_LIST="$FAIL_LIST $COMP"
             fi
           done
@@ -128,18 +152,30 @@ jobs:
           find data/prep -name "*.csv" -exec wc -l {} \; 2>/dev/null | head -20
 
       - name: Commit and push results
+        shell: bash
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -A data/
           if git diff --cached --quiet; then
             echo "Aucun changement à commiter"
-          else
-            git commit -m "data: scrape ${{ steps.params.outputs.seasons }} run #${{ github.run_number }}" \
-                       -m "Triggered by: ${{ github.event_name }}" \
-                       -m "Compétitions : ${{ steps.params.outputs.competitions }}"
-            git push
+            exit 0
           fi
+          git commit -m "data: scrape ${{ steps.params.outputs.seasons }} run #${{ github.run_number }}" \
+                     -m "Triggered by: ${{ github.event_name }}" \
+                     -m "Compétitions : ${{ steps.params.outputs.competitions }}"
+          # Push résilient : retry avec rebase si la branche a bougé pendant le run
+          for attempt in 1 2 3; do
+            if git push; then
+              echo "Push OK (tentative $attempt)"
+              exit 0
+            fi
+            echo "Push échoué (tentative $attempt), pull --rebase puis retry..."
+            git pull --rebase origin master || true
+            sleep $((attempt * 5))
+          done
+          echo "Push impossible après 3 tentatives" >&2
+          exit 1
 
       - name: Upload logs as artifact
         if: always()
