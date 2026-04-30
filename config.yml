@@ -36,16 +36,16 @@ defintions:
     - JAP1  # Japan - J1 League
     - RSK1  # South Korea - K League 1
     - AUS1  # Australia - A-League
-      # European second-tier leagues (added for football-dashboard)
-      - GB2   # England - Championship
-      - ES2   # Spain - LaLiga 2
-      # Americas tier 2 (added for football-dashboard)
-      - BRA2  # Brazil - Serie B
-      # African leagues (added for football-dashboard)
-      - SFA1  # South Africa - Premiership
-      - ALG1  # Algeria - Ligue 1
-      - MAR1  # Morocco - Botola Pro
-      # Domestic cups
+    # European second-tier leagues (added for football-dashboard)
+    - GB2   # England - Championship
+    - ES2   # Spain - LaLiga 2
+    # Americas tier 2 (added for football-dashboard)
+    - BRA2  # Brazil - Serie B
+    # African leagues (added for football-dashboard)
+    - SFA1  # South Africa - Premiership
+    - ALG1  # Algeria - Ligue 1
+    - MAR1  # Morocco - Botola Pro
+    # Domestic cups
     - DFB   # Germany - DFB-Pokal
     - CDR   # Spain - Copa del Rey
     - FAC   # England - FA Cup
