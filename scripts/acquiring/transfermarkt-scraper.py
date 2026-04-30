@@ -184,9 +184,14 @@ def filter_parent_file(source_file, filter_ids, id_extractor):
 # Maps filter name -> (id_extractor, assets to run with --asset all, parent asset name)
 
 FILTER_ASSETS = {
-  'competitions': ['clubs', 'players', 'appearances', 'games', 'game_lineups'],
-  'clubs': ['players', 'appearances'],
-  'players': ['appearances'],
+  # NOTE: 'appearances', 'games' and 'game_lineups' are intentionally skipped because
+  # Transfermarkt migrated those pages to a JS-rendered frontend (data hooks like
+  # 'performanceByCompetitions') that the legacy XPath/CSS selectors no longer match.
+  # V-Pin sources match-by-match stats from StatsHub, not Transfermarkt, so we only
+  # need 'clubs' and 'players' (player meta: age, position, market value, club).
+  'competitions': ['clubs', 'players'],
+  'clubs': ['players'],
+  'players': [],
 }
 
 FILTER_ID_EXTRACTORS = {
