@@ -62,6 +62,8 @@ jobs:
       - name: Install Python dependencies
         run: |
           poetry config virtualenvs.in-project true
+          # Régénère le lock pour refléter le pyproject (fork MaloElPipo/transfermarkt-scraper)
+          poetry lock --no-update --no-interaction
           poetry install --no-interaction --no-ansi
           poetry run python -c "import tfmkt; print('tfmkt OK from MaloElPipo fork')"
 
